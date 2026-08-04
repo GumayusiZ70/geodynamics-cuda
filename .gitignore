@@ -1,0 +1,22 @@
+# 编译产物：每台电脑自行生成，不提交到仓库。
+build/
+bin/
+*.o
+*.a
+*.so
+*.exe
+
+# 模拟输出通常很大，应存放在本地或专用数据存储中。
+output/
+results/
+checkpoints/
+*.vtk
+*.vti
+*.pvd
+*.png
+*.mp4
+
+# 本地编辑器和操作系统生成的文件。
+.vscode/
+.idea/
+.DS_Store
