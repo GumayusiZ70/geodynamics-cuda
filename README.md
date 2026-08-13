@@ -22,6 +22,9 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+构建默认针对 RTX 3060 Laptop(sm_86);在其它 GPU 上构建时追加架构参数,
+例如 `-DCMAKE_CUDA_ARCHITECTURES=89`(RTX 40 系)或 `-DCMAKE_CUDA_ARCHITECTURES=75`(RTX 20 系)。
+
 运行当前的温度扩散演示程序：
 
 ```bash

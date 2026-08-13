@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
+# 默认针对开发机 GPU(RTX 3060 Laptop,计算能力 8.6)生成 SASS。
+# 换机器构建时用 -DCMAKE_CUDA_ARCHITECTURES=<arch> 覆盖,
+# 例如 RTX 40 系为 89,RTX 30 系为 86,RTX 20 系为 75。
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA architectures to build for")
+endif()
+
 # 本项目同时编译普通 C++ 主程序和 CUDA kernel。
 project(geodynamics_cuda LANGUAGES CXX CUDA)
 
