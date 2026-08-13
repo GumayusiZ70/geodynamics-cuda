@@ -5,6 +5,8 @@
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -51,6 +53,59 @@ std::vector<double> cpu_diffusion_step(const std::vector<double>& temperature,
     return next;
 }
 
+// CPU 参考版的解析旋涡速度；必须与 CUDA 版本使用相同流函数。
+void vortex_velocity(int i, int j, const geodynamics::Grid2D& grid,
+                     const geodynamics::VortexParameters& vortex, double& u, double& v) {
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double length_x = static_cast<double>(grid.nx - 1) * grid.dx;
+    const double length_y = static_cast<double>(grid.ny - 1) * grid.dy;
+    const double x = i * grid.dx;
+    const double y = j * grid.dy;
+    const double sx = std::sin(pi * x / length_x);
+    const double sy = std::sin(pi * y / length_y);
+    u = vortex.strength * (pi / length_y) * sx * sx * std::sin(2.0 * pi * y / length_y);
+    v = -vortex.strength * (pi / length_x) * std::sin(2.0 * pi * x / length_x) * sy * sy;
+}
+
+std::vector<double> cpu_advection_diffusion_step(const std::vector<double>& temperature,
+                                                 const geodynamics::Grid2D& grid,
+                                                 const geodynamics::ThermalParameters& thermal,
+                                                 const geodynamics::VortexParameters& vortex) {
+    std::vector<double> next = temperature;
+    for (int j = 1; j < grid.ny - 1; ++j) {
+        for (int i = 1; i < grid.nx - 1; ++i) {
+            const std::size_t center_index = index(i, j, grid.nx);
+            const double center = temperature[center_index];
+            const double left = temperature[index(i - 1, j, grid.nx)];
+            const double right = temperature[index(i + 1, j, grid.nx)];
+            const double below = temperature[index(i, j - 1, grid.nx)];
+            const double above = temperature[index(i, j + 1, grid.nx)];
+            double u = 0.0;
+            double v = 0.0;
+            vortex_velocity(i, j, grid, vortex, u, v);
+            const double dtdx = u >= 0.0 ? (center - left) / grid.dx : (right - center) / grid.dx;
+            const double dtdy = v >= 0.0 ? (center - below) / grid.dy : (above - center) / grid.dy;
+            const double laplacian = (left - 2.0 * center + right) / (grid.dx * grid.dx) +
+                                     (below - 2.0 * center + above) / (grid.dy * grid.dy);
+            next[center_index] = center + thermal.dt *
+                (-u * dtdx - v * dtdy + thermal.diffusivity * laplacian);
+        }
+    }
+    return next;
+}
+
+void require_close(const std::vector<double>& gpu_result, const std::vector<double>& reference,
+                   const char* label) {
+    double maximum_error = 0.0;
+    for (std::size_t cell = 0; cell < gpu_result.size(); ++cell) {
+        maximum_error = std::max(maximum_error, std::abs(gpu_result[cell] - reference[cell]));
+    }
+    if (maximum_error > 1.0e-12) {
+        throw std::runtime_error(std::string(label) + " CPU/GPU 最大误差为 " +
+                                 std::to_string(maximum_error));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -82,17 +137,28 @@ int main() {
         next_temperature.copy_to_host(gpu_result.data(), grid.cell_count());
 
         // 使用最大逐元素误差，而不是视觉比较，作为严格验收条件。
-        double maximum_error = 0.0;
-        for (std::size_t cell = 0; cell < grid.cell_count(); ++cell) {
-            maximum_error = std::max(maximum_error, std::abs(gpu_result[cell] - reference[cell]));
+        require_close(gpu_result, reference, "纯扩散");
+
+        // 同一初始场再验证一阶迎风平流-扩散，确保速度符号和上游选取正确。
+        const geodynamics::VortexParameters vortex{0.03};
+        std::vector<double> advection_reference = cpu_advection_diffusion_step(input, grid, parameters, vortex);
+        apply_cpu_boundaries(advection_reference, grid, parameters);
+        temperature.copy_from_host(input.data(), grid.cell_count());
+        geodynamics::advance_temperature_advection_diffusion(
+            temperature.data(), next_temperature.data(), grid, parameters, vortex);
+        geodynamics::apply_temperature_boundaries(next_temperature.data(), grid, parameters);
+        next_temperature.copy_to_host(gpu_result.data(), grid.cell_count());
+        require_close(gpu_result, advection_reference, "平流-扩散");
+
+        const auto diagnostics = geodynamics::compute_temperature_diagnostics(
+            next_temperature.data(), grid, parameters, vortex);
+        if (!diagnostics.is_finite || diagnostics.advection_cfl <= 0.0 ||
+            diagnostics.diffusion_cfl <= 0.0 || diagnostics.mean_temperature <= 0.0 ||
+            diagnostics.mean_squared_temperature <= 0.0) {
+            throw std::runtime_error("温度诊断结果无效");
         }
 
-        if (maximum_error > 1.0e-12) {
-            std::cerr << "Temperature diffusion test failed; max error = " << maximum_error << '\n';
-            return 1;
-        }
-
-        std::cout << "Temperature diffusion test passed; max error = " << maximum_error << '\n';
+        std::cout << "温度扩散与平流-扩散 CPU/GPU 对照测试通过\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Temperature diffusion test failed: " << error.what() << '\n';

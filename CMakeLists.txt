@@ -16,6 +16,7 @@ add_library(geodynamics_core STATIC
     src/boundary.cu
     src/diagnostics.cu
     src/multigrid.cu
+    src/output.cpp
     src/stokes_pt.cu
     src/temperature.cu
 )
@@ -35,4 +36,14 @@ if(BUILD_TESTING)
     add_executable(test_temperature tests/test_temperature.cpp)
     target_link_libraries(test_temperature PRIVATE geodynamics_core)
     add_test(NAME temperature_diffusion_step COMMAND test_temperature)
+
+    # MAC 网格算子必须在 Stokes 求解前由独立解析场验证。
+    add_executable(test_mac_grid tests/test_mac_grid.cpp)
+    target_link_libraries(test_mac_grid PRIVATE geodynamics_core)
+    add_test(NAME mac_grid_operators COMMAND test_mac_grid)
+
+    # 伪瞬态 Stokes 求解器用离散流函数制造解验证收敛到机器精度。
+    add_executable(test_stokes tests/test_stokes.cpp)
+    target_link_libraries(test_stokes PRIVATE geodynamics_core)
+    add_test(NAME stokes_mms COMMAND test_stokes)
 endif()
